@@ -11,7 +11,7 @@ function App() {
 
   const API_BASE = "http://localhost:5000";
 
-  // Step 1: Generate initial blueprint
+  // 1️⃣ Generate initial blueprint
   const handleGenerate = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -19,70 +19,82 @@ function App() {
     setBlueprint("");
 
     try {
-      const res = await fetch(`${API_BASE}/generate`, {
+      const res = await fetch(`${API_BASE}/agent/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idea, email }),
       });
       const data = await res.json();
-      setSessionId(data.sessionId);
-      setBlueprint(data.blueprint);
-      setMessage("Blueprint generated! You can suggest improvements below.");
+      if (res.ok) {
+        setSessionId(data.sessionId);
+        setBlueprint(data.blueprint);
+        setMessage("✅ Blueprint generated! You can suggest improvements above.");
+      } else {
+        setMessage(`❌ Error: ${data.error || "Could not generate blueprint."}`);
+      }
     } catch (err) {
       console.error(err);
-      setMessage("Error generating blueprint.");
+      setMessage("❌ Error generating blueprint.");
     }
     setLoading(false);
   };
 
-  // Step 2: Improve blueprint
+  // 2️⃣ Improve blueprint / send message to agent
   const handleImprove = async () => {
     if (!instruction) return;
     setLoading(true);
     setMessage("");
 
     try {
-      const res = await fetch(`${API_BASE}/improve`, {
+      const res = await fetch(`${API_BASE}/agent/message`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, instruction }),
+        body: JSON.stringify({ sessionId, message: instruction }),
       });
       const data = await res.json();
-      setBlueprint(data.blueprint);
-      setInstruction("");
-      setMessage("Blueprint updated!");
+      if (res.ok) {
+        setBlueprint(data.blueprint);
+        setInstruction("");
+        setMessage("✅ Blueprint updated!");
+      } else {
+        setMessage(`❌ Error: ${data.error || "Could not update blueprint."}`);
+      }
     } catch (err) {
       console.error(err);
-      setMessage("Error improving blueprint.");
+      setMessage("❌ Error improving blueprint.");
     }
     setLoading(false);
   };
 
-  // Step 3: Finalize & email PDF
+  // 3️⃣ Finalize blueprint and send PDF
   const handleFinalize = async () => {
     setLoading(true);
     setMessage("");
 
     try {
-      const res = await fetch(`${API_BASE}/finalize`, {
+      const res = await fetch(`${API_BASE}/agent/finalize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId }),
       });
       const data = await res.json();
-      setMessage(data.message);
-      setSessionId(null);
-      setBlueprint("");
+      if (res.ok) {
+        setMessage(data.message);
+        setSessionId(null);
+        setBlueprint("");
+      } else {
+        setMessage(`❌ Error: ${data.error || "Could not finalize blueprint."}`);
+      }
     } catch (err) {
       console.error(err);
-      setMessage("Error finalizing blueprint.");
+      setMessage("❌ Error finalizing blueprint.");
     }
     setLoading(false);
   };
 
   return (
     <div style={{ padding: "2rem", maxWidth: 800, margin: "2rem auto", fontFamily: "sans-serif" }}>
-      <h1 style={{ textAlign: "center", marginBottom: "1.5rem" }}>AI Website Blueprint Generator</h1>
+      <h1 style={{ textAlign: "center", marginBottom: "1.5rem" }}>AI Website Blueprint Agent</h1>
 
       {!sessionId && (
         <form onSubmit={handleGenerate}>
@@ -131,15 +143,25 @@ function App() {
               fontWeight: "bold",
             }}
           >
-            {loading ? "Generating..." : "Generate My Blueprint"}
+            {loading ? "Generating..." : "Generate Blueprint"}
           </button>
         </form>
       )}
 
       {sessionId && (
         <>
-          <div style={{ marginTop: "2rem", whiteSpace: "pre-wrap", background: "#f5f5f5", padding: "1rem", borderRadius: "8px" }}>
-            {blueprint}
+          <div
+            style={{
+              marginTop: "2rem",
+              whiteSpace: "pre-wrap",
+              background: "#333",
+              color: "#fff",
+              padding: "1rem",
+              borderRadius: "8px",
+              minHeight: "200px",
+            }}
+          >
+            {blueprint || "Loading blueprint..."}
           </div>
 
           <textarea
@@ -198,7 +220,7 @@ function App() {
       )}
 
       {message && (
-        <p style={{ marginTop: "1.5rem", textAlign: "center", color: "#333", fontSize: "1rem" }}>
+        <p style={{ marginTop: "1.5rem", textAlign: "center", color: "#c5c5c5de", fontSize: "1rem" }}>
           {message}
         </p>
       )}

@@ -14,7 +14,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Nodemailer setup
+// Email transporter
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -23,21 +23,17 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// 🧠 Function to clean AI text
+// In-memory sessions
+const sessions = {};
+
+// Clean AI text
 function cleanText(raw) {
   const decoded = he.decode(raw || "");
-  return decoded
-    .replace(/[’‘]/g, "'")
-    .replace(/[“”]/g, '"')
-    .replace(/[•–—]/g, "-")
-    .replace(/\r?\n\s*/g, "\n") // normalize line breaks
-    .trim();
+  return decoded.replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[•–—]/g, "-").trim();
 }
 
-// 🧠 Generate blueprint using Groq API
-async function generateBlueprint(idea) {
-  console.log("🧠 Sending prompt to Groq API with model: llama-3.3-70b-versatile...");
-
+// Call Groq AI
+async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
@@ -46,39 +42,44 @@ async function generateBlueprint(idea) {
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          {
-            role: "system",
-            content: "You are a professional web design consultant generating detailed blueprints.",
-          },
-          {
-            role: "user",
-            content: `Create a detailed website blueprint for this idea: "${idea}". Include headings, bullet points, and numbered sections for PDF formatting.`,
-          },
-        ],
+        model,
+        messages,
         max_tokens: 1200,
         temperature: 0.7,
       }),
     });
-
     const data = await res.json();
-    console.log("Groq API response:", data);
-
-    if (data?.choices?.[0]?.message?.content) {
-      return cleanText(data.choices[0].message.content);
-    } else {
-      console.warn("⚠️ No text from model:", data);
-      return "No response from model.";
-    }
+    return data?.choices?.[0]?.message?.content ? cleanText(data.choices[0].message.content) : null;
   } catch (err) {
-    console.error("❌ Error fetching from Groq:", err);
-    return "Error generating blueprint.";
+    console.error("❌ Error calling AI:", err);
+    return null;
   }
 }
 
-// 🧾 Create nicely formatted PDF
-function createPDF(blueprintText) {
+// Draw formatted PDF from AI text
+function drawMarkdown(doc, markdown) {
+  const paragraphs = markdown.split(/\n+/);
+  paragraphs.forEach(p => {
+    p = p.trim();
+    if (!p) return;
+    if (p.startsWith("**") && p.endsWith("**")) {
+      // Bold
+      doc.font("Helvetica-Bold").fillColor("#333").text(p.replace(/\*\*/g, ""), { lineGap: 4 });
+    } else if (p.startsWith("- ") || p.startsWith("* ")) {
+      // Bullet
+      doc.font("Helvetica").fillColor("#333").text("• " + p.slice(2), { lineGap: 4 });
+    } else if (/^#/.test(p)) {
+      // Heading style (optional)
+      doc.font("Helvetica-Bold").fillColor("#333").text(p.replace(/^#+\s*/, ""), { lineGap: 4 });
+    } else {
+      doc.font("Helvetica").fillColor("#333").text(p, { lineGap: 4 });
+    }
+    doc.moveDown(0.2);
+  });
+}
+
+// Create PDF
+function createPDF(text) {
   const discount = process.env.DISCOUNT_PERCENT || 25;
   const projectsDir = path.join(process.cwd(), "projects");
   if (!fs.existsSync(projectsDir)) fs.mkdirSync(projectsDir);
@@ -87,50 +88,21 @@ function createPDF(blueprintText) {
   const doc = new PDFDocument({ margin: 40 });
   doc.pipe(fs.createWriteStream(filePath));
 
-  // Header
   doc.fontSize(20).fillColor("#333").text("Website Blueprint", { align: "center" });
   doc.moveDown();
-  doc.fontSize(12).fillColor("#555").text(`Discount: ${discount}% off your next project`);
+  doc.fontSize(12).text(`Discount: ${discount}% off your next project`);
   doc.moveDown();
 
-  // Split text into lines
-  const lines = blueprintText.split("\n");
-
-  lines.forEach((line) => {
-    line = line.trim();
-    if (!line) {
-      doc.moveDown();
-      return;
-    }
-
-    // Headings
-    if (/^(I+\.|II+\.|III+\.|IV+\.|V+\.|[A-Z][A-Za-z\s]+)$/.test(line)) {
-      doc.moveDown();
-      doc.fontSize(14).fillColor("#000").text(line, { underline: true });
-      doc.moveDown(0.5);
-    }
-    // Numbered lists
-    else if (/^\d+\./.test(line)) {
-      doc.fontSize(11).fillColor("#000").text(line, { indent: 10 });
-    }
-    // Bulleted lists
-    else if (/^-\s/.test(line) || /^\*/.test(line)) {
-      doc.fontSize(11).fillColor("#000").text(line.replace(/^[-*]\s/, "• "), { indent: 20 });
-    }
-    // Normal paragraph
-    else {
-      doc.fontSize(11).fillColor("#000").text(line, { align: "left" });
-    }
-  });
+  drawMarkdown(doc, text);
 
   doc.moveDown();
-  doc.fontSize(12).fillColor("#333").text("Call to Action: Contact me to get started!", { align: "center" });
+  doc.fillColor("#333").text("Call to Action: Contact me to get started!", { align: "center" });
 
   doc.end();
   return filePath;
 }
 
-// 📧 Send email with PDF
+// Send email
 async function sendEmail(to, pdfPath) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -141,21 +113,52 @@ async function sendEmail(to, pdfPath) {
   });
 }
 
-// 🚀 API endpoint
-app.post("/generate", async (req, res) => {
-  try {
-    const { idea, email } = req.body;
-    if (!idea || !email) return res.status(400).json({ error: "Idea and email required" });
+// 1️⃣ Start session
+app.post("/agent/start", async (req, res) => {
+  const { idea, email } = req.body;
+  if (!idea || !email) return res.status(400).json({ error: "Idea and email required" });
 
-    const blueprintText = await generateBlueprint(idea);
-    const pdfPath = createPDF(blueprintText);
-    await sendEmail(email, pdfPath);
+  const sessionId = Date.now().toString();
+  const messages = [
+    { role: "system", content: "You are a professional web design consultant generating detailed blueprints." },
+    { role: "user", content: `Create a detailed website blueprint for this idea: "${idea}".` },
+  ];
 
-    res.json({ message: "Blueprint generated and emailed successfully!" });
-  } catch (err) {
-    console.error("❌ Server error:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const blueprint = await callGroqAI(messages);
+  if (!blueprint) return res.status(500).json({ error: "AI generation failed" });
+
+  sessions[sessionId] = { idea, email, blueprint, history: [...messages, { role: "assistant", content: blueprint }] };
+
+  res.json({ sessionId, blueprint });
+});
+
+// 2️⃣ Continue conversation
+app.post("/agent/message", async (req, res) => {
+  const { sessionId, message } = req.body;
+  if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
+
+  const session = sessions[sessionId];
+  session.history.push({ role: "user", content: message });
+
+  const reply = await callGroqAI(session.history);
+  if (!reply) return res.status(500).json({ error: "AI generation failed" });
+
+  session.history.push({ role: "assistant", content: reply });
+  session.blueprint = reply;
+
+  res.json({ reply, blueprint: reply });
+});
+
+// 3️⃣ Finalize PDF & email
+app.post("/agent/finalize", async (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
+
+  const session = sessions[sessionId];
+  const pdfPath = createPDF(session.blueprint);
+  await sendEmail(session.email, pdfPath);
+
+  res.json({ message: "Blueprint finalized and emailed!" });
 });
 
 app.listen(process.env.PORT || 5000, () => {
