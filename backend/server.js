@@ -11,28 +11,35 @@ import he from "he";
 dotenv.config();
 
 const app = express();
-app.use(cors());
+
+// ✅ CORS: allow your frontend domain
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "*", // e.g. "https://blueprint-agent-frontend.onrender.com"
+    methods: ["GET", "POST", "OPTIONS"],
+  })
+);
 app.use(express.json());
 
-// Email transporter
+// ===== Nodemailer setup =====
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    pass: process.env.EMAIL_PASS, // Use App Password in Gmail
   },
 });
 
-// In-memory sessions
+// ===== In-memory sessions =====
 const sessions = {};
 
-// Clean AI text
+// ===== Utility: clean AI text =====
 function cleanText(raw) {
   const decoded = he.decode(raw || "");
   return decoded.replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[•–—]/g, "-").trim();
 }
 
-// Call Groq AI
+// ===== Call Groq AI =====
 async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -49,19 +56,17 @@ async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
       }),
     });
     const data = await res.json();
-    return data?.choices?.[0]?.message?.content
-      ? cleanText(data.choices[0].message.content)
-      : null;
+    return data?.choices?.[0]?.message?.content ? cleanText(data.choices[0].message.content) : null;
   } catch (err) {
     console.error("❌ Error calling AI:", err);
     return null;
   }
 }
 
-// Draw formatted PDF from AI text
+// ===== Draw Markdown-style PDF =====
 function drawMarkdown(doc, markdown) {
   const paragraphs = markdown.split(/\n+/);
-  paragraphs.forEach(p => {
+  paragraphs.forEach((p) => {
     p = p.trim();
     if (!p) return;
     if (p.startsWith("**") && p.endsWith("**")) {
@@ -77,10 +82,13 @@ function drawMarkdown(doc, markdown) {
   });
 }
 
-// Create PDF in /tmp (Render safe)
+// ===== Create PDF =====
 function createPDF(text) {
   const discount = process.env.DISCOUNT_PERCENT || 25;
-  const filePath = path.join("/tmp", `blueprint-${Date.now()}.pdf`);
+  const projectsDir = path.join("/tmp", "projects");
+  if (!fs.existsSync(projectsDir)) fs.mkdirSync(projectsDir, { recursive: true });
+
+  const filePath = path.join(projectsDir, `blueprint-${Date.now()}.pdf`);
   const doc = new PDFDocument({ margin: 40 });
   doc.pipe(fs.createWriteStream(filePath));
 
@@ -98,7 +106,7 @@ function createPDF(text) {
   return filePath;
 }
 
-// Send email
+// ===== Send email =====
 async function sendEmail(to, pdfPath) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -108,6 +116,8 @@ async function sendEmail(to, pdfPath) {
     attachments: [{ path: pdfPath }],
   });
 }
+
+// ===== Routes =====
 
 // 1️⃣ Start session
 app.post("/agent/start", async (req, res) => {
@@ -123,12 +133,7 @@ app.post("/agent/start", async (req, res) => {
   const blueprint = await callGroqAI(messages);
   if (!blueprint) return res.status(500).json({ error: "AI generation failed" });
 
-  sessions[sessionId] = {
-    idea,
-    email,
-    blueprint,
-    history: [...messages, { role: "assistant", content: blueprint }],
-  };
+  sessions[sessionId] = { idea, email, blueprint, history: [...messages, { role: "assistant", content: blueprint }] };
 
   res.json({ sessionId, blueprint });
 });
@@ -155,19 +160,20 @@ app.post("/agent/finalize", async (req, res) => {
   const { sessionId } = req.body;
   if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
 
+  const session = sessions[sessionId];
+
   try {
-    const session = sessions[sessionId];
     const pdfPath = createPDF(session.blueprint);
     await sendEmail(session.email, pdfPath);
 
     res.json({ message: "Blueprint finalized and emailed!" });
   } catch (err) {
-    console.error("❌ Finalize failed:", err);
-    res.status(500).json({ error: "Server error during PDF/email creation" });
+    console.error("❌ Server error during PDF/email creation:", err);
+    res.status(500).json({ error: "Server failed to create PDF or send email." });
   }
 });
 
-// Start server
+// ===== Start server =====
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`✅ Backend running on http://localhost:${PORT}`);
