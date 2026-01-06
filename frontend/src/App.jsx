@@ -1,261 +1,166 @@
-import { useState } from "react";
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
+import fs from "fs";
+import path from "path";
+import PDFDocument from "pdfkit";
+import nodemailer from "nodemailer";
+import fetch from "node-fetch";
+import he from "he";
 
-function App() {
-  const [idea, setIdea] = useState("");
-  const [email, setEmail] = useState("");
-  const [sessionId, setSessionId] = useState(null);
-  const [blueprint, setBlueprint] = useState("");
-  const [instruction, setInstruction] = useState("");
-  const [message, setMessage] = useState("");
-  const [loadingGenerate, setLoadingGenerate] = useState(false);
-  const [loadingImprove, setLoadingImprove] = useState(false);
-  const [loadingFinalize, setLoadingFinalize] = useState(false);
+dotenv.config();
 
-  // ✅ Use production API base or fallback to localhost
-  const API_BASE =
-    import.meta.env.VITE_API_BASE ||
-    (window.location.hostname === "localhost"
-      ? "http://localhost:5000"
-      : window.location.origin);
+const app = express();
 
-  // ✅ Helper to safely fetch JSON and detect backend HTML errors
-  const safeFetchJson = async (url, options) => {
-    try {
-      const res = await fetch(url, options);
-      const text = await res.text();
-
-      // Detect HTML errors (e.g. Render 404/502 pages)
-      if (text.startsWith("<!DOCTYPE") || text.startsWith("<html")) {
-        console.error("⚠️ Backend returned HTML instead of JSON:", text.slice(0, 120));
-        return { ok: false, data: { error: "Server returned HTML — likely wrong endpoint or CORS issue." } };
+// ✅ CORS — allows frontend + local dev
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://blueprint-agent-frontend.onrender.com",
+];
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn("❌ Blocked CORS request from:", origin);
+        callback(new Error("Not allowed by CORS"));
       }
+    },
+  })
+);
+app.use(express.json());
 
-      try {
-        return { ok: res.ok, data: JSON.parse(text) };
-      } catch {
-        console.error("Invalid JSON from backend:", text);
-        return { ok: false, data: { error: "Invalid backend JSON response" } };
-      }
-    } catch (err) {
-      console.error("Fetch failed:", err);
-      return { ok: false, data: { error: "Network error. Check API_BASE URL." } };
-    }
-  };
+// ✅ Email transporter
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+});
 
-  // 🧠 1️⃣ Generate initial blueprint
-  const handleGenerate = async (e) => {
-    e.preventDefault();
-    setMessage("");
-    setBlueprint("");
-    setLoadingGenerate(true);
+// In-memory sessions
+const sessions = {};
 
-    const { ok, data } = await safeFetchJson(`${API_BASE}/agent/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ idea, email }),
-    });
-
-    if (ok) {
-      setSessionId(data.sessionId);
-      setBlueprint(data.blueprint);
-      setMessage("✅ Blueprint generated! You can suggest improvements below.");
-    } else {
-      setMessage(`❌ ${data.error || "Could not generate blueprint."}`);
-    }
-    setLoadingGenerate(false);
-  };
-
-  // ✍️ 2️⃣ Improve blueprint
-  const handleImprove = async () => {
-    if (!instruction || !sessionId) return;
-    setMessage("");
-    setLoadingImprove(true);
-
-    const { ok, data } = await safeFetchJson(`${API_BASE}/agent/message`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, message: instruction }),
-    });
-
-    if (ok) {
-      setBlueprint(data.blueprint);
-      setInstruction("");
-      setMessage("✅ Blueprint updated!");
-    } else {
-      setMessage(`❌ ${data.error || "Could not update blueprint."}`);
-    }
-    setLoadingImprove(false);
-  };
-
-  // 📤 3️⃣ Finalize & send PDF
-  const handleFinalize = async () => {
-    if (!sessionId) return;
-    setMessage("");
-    setLoadingFinalize(true);
-
-    const { ok, data } = await safeFetchJson(`${API_BASE}/agent/finalize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId }),
-    });
-
-    if (ok) {
-      setMessage(data.message);
-      setSessionId(null);
-      setBlueprint("");
-    } else {
-      setMessage(`❌ ${data.error || "Could not finalize blueprint."}`);
-    }
-    setLoadingFinalize(false);
-  };
-
-  return (
-    <div style={{ padding: "2rem", maxWidth: 800, margin: "2rem auto", fontFamily: "sans-serif" }}>
-      <h1 style={{ textAlign: "center", marginBottom: "1.5rem" }}>AI Website Blueprint Agent</h1>
-
-      {!sessionId && (
-        <form onSubmit={handleGenerate}>
-          <label htmlFor="idea" style={{ display: "block", marginBottom: "0.5rem" }}>
-            Describe your website idea
-          </label>
-          <textarea
-            id="idea"
-            rows="4"
-            placeholder="Your website idea..."
-            value={idea}
-            onChange={(e) => setIdea(e.target.value)}
-            required
-            style={{
-              width: "100%",
-              padding: "0.8rem",
-              marginBottom: "1rem",
-              borderRadius: "8px",
-              border: "1px solid #ccc",
-              fontSize: "1rem",
-            }}
-          />
-
-          <label htmlFor="email" style={{ display: "block", marginBottom: "0.5rem" }}>
-            Your Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{
-              width: "100%",
-              padding: "0.8rem",
-              marginBottom: "1.5rem",
-              borderRadius: "8px",
-              border: "1px solid #ccc",
-              fontSize: "1rem",
-            }}
-          />
-
-          <button
-            type="submit"
-            disabled={loadingGenerate}
-            style={{
-              background: "#1a1a1a",
-              color: "white",
-              border: "none",
-              padding: "0.8rem 1.5rem",
-              borderRadius: "8px",
-              cursor: loadingGenerate ? "not-allowed" : "pointer",
-              width: "100%",
-              fontSize: "1rem",
-              fontWeight: "bold",
-            }}
-          >
-            {loadingGenerate ? "Generating..." : "Generate Blueprint"}
-          </button>
-        </form>
-      )}
-
-      {sessionId && (
-        <>
-          <div
-            style={{
-              marginTop: "2rem",
-              whiteSpace: "pre-wrap",
-              background: "#333",
-              color: "#fff",
-              padding: "1rem",
-              borderRadius: "8px",
-              minHeight: "200px",
-            }}
-          >
-            {blueprint || "Loading blueprint..."}
-          </div>
-
-          <label htmlFor="instruction" style={{ display: "block", marginTop: "1rem", marginBottom: "0.5rem" }}>
-            Suggest improvements (optional)
-          </label>
-          <textarea
-            id="instruction"
-            rows="2"
-            placeholder="Enter your instruction..."
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "0.8rem",
-              borderRadius: "8px",
-              border: "1px solid #ccc",
-              fontSize: "1rem",
-            }}
-          />
-
-          <button
-            onClick={handleImprove}
-            disabled={loadingImprove}
-            style={{
-              background: "#007bff",
-              color: "white",
-              border: "none",
-              padding: "0.8rem 1.5rem",
-              borderRadius: "8px",
-              cursor: loadingImprove ? "not-allowed" : "pointer",
-              width: "100%",
-              fontSize: "1rem",
-              fontWeight: "bold",
-              marginTop: "0.5rem",
-            }}
-          >
-            {loadingImprove ? "Updating..." : "Improve Blueprint"}
-          </button>
-
-          <button
-            onClick={handleFinalize}
-            disabled={loadingFinalize}
-            style={{
-              background: "#28a745",
-              color: "white",
-              border: "none",
-              padding: "0.8rem 1.5rem",
-              borderRadius: "8px",
-              cursor: loadingFinalize ? "not-allowed" : "pointer",
-              width: "100%",
-              fontSize: "1rem",
-              fontWeight: "bold",
-              marginTop: "0.5rem",
-            }}
-          >
-            {loadingFinalize ? "Finalizing..." : "Finalize & Send PDF"}
-          </button>
-        </>
-      )}
-
-      {message && (
-        <p style={{ marginTop: "1.5rem", textAlign: "center", color: "#c5c5c5de", fontSize: "1rem" }}>
-          {message}
-        </p>
-      )}
-    </div>
-  );
+// 🧹 Clean AI text
+function cleanText(raw) {
+  const decoded = he.decode(raw || "");
+  return decoded.replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[•–—]/g, "-").trim();
 }
 
-export default App;
+// 🧠 Groq API helper
+async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({ model, messages, max_tokens: 1200, temperature: 0.7 }),
+    });
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content
+      ? cleanText(data.choices[0].message.content)
+      : null;
+  } catch (err) {
+    console.error("❌ Error calling Groq:", err);
+    return null;
+  }
+}
+
+// 🧾 PDF generator
+function createPDF(text) {
+  const discount = process.env.DISCOUNT_PERCENT || 25;
+  const projectsDir = path.join(process.cwd(), "projects");
+  if (!fs.existsSync(projectsDir)) fs.mkdirSync(projectsDir, { recursive: true });
+
+  const filePath = path.join(projectsDir, `blueprint-${Date.now()}.pdf`);
+  const doc = new PDFDocument({ margin: 40 });
+  doc.pipe(fs.createWriteStream(filePath));
+
+  doc.fontSize(20).fillColor("#333").text("Website Blueprint", { align: "center" });
+  doc.moveDown();
+  doc.fontSize(12).text(`Discount: ${discount}% off your next project`);
+  doc.moveDown();
+  doc.fontSize(11).fillColor("#333").text(text, { lineGap: 4 });
+  doc.moveDown();
+  doc.text("Call to Action: Contact me to get started!", { align: "center" });
+  doc.end();
+
+  return filePath;
+}
+
+// 📧 Send email
+async function sendEmail(to, pdfPath) {
+  await transporter.sendMail({
+    from: process.env.EMAIL_USER,
+    to,
+    subject: "Your Website Blueprint",
+    text: "Attached is your generated website blueprint.",
+    attachments: [{ path: pdfPath }],
+  });
+}
+
+// 🟢 Start session
+app.post("/agent/start", async (req, res) => {
+  const { idea, email } = req.body;
+  if (!idea || !email) return res.status(400).json({ error: "Idea and email required" });
+
+  const sessionId = Date.now().toString();
+  const messages = [
+    { role: "system", content: "You are a professional web design consultant generating detailed blueprints." },
+    { role: "user", content: `Create a detailed website blueprint for this idea: "${idea}".` },
+  ];
+
+  const blueprint = await callGroqAI(messages);
+  if (!blueprint) return res.status(500).json({ error: "AI generation failed" });
+
+  sessions[sessionId] = { idea, email, blueprint, history: [...messages, { role: "assistant", content: blueprint }] };
+  res.json({ sessionId, blueprint });
+});
+
+// 🟡 Improve blueprint
+app.post("/agent/message", async (req, res) => {
+  const { sessionId, message } = req.body;
+  if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
+
+  const session = sessions[sessionId];
+  session.history.push({ role: "user", content: message });
+
+  const reply = await callGroqAI(session.history);
+  if (!reply) return res.status(500).json({ error: "AI generation failed" });
+
+  session.history.push({ role: "assistant", content: reply });
+  session.blueprint = reply;
+  res.json({ reply, blueprint: reply });
+});
+
+// 🧩 Finalize & email (with full logging)
+app.post("/agent/finalize", async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    if (!sessionId || !sessions[sessionId]) {
+      return res.status(400).json({ error: "Invalid session" });
+    }
+
+    const session = sessions[sessionId];
+    if (!session.blueprint) {
+      return res.status(400).json({ error: "No blueprint found in session." });
+    }
+
+    console.log("📦 Finalizing session:", sessionId, "for", session.email);
+    const pdfPath = createPDF(session.blueprint);
+    console.log("✅ PDF created:", pdfPath);
+
+    await sendEmail(session.email, pdfPath);
+    console.log("📨 Email sent to:", session.email);
+
+    res.json({ message: "Blueprint finalized and emailed!" });
+  } catch (err) {
+    console.error("❌ Error in /agent/finalize:", err);
+    res.status(500).json({ error: "Server error: " + err.message });
+  }
+});
+
+app.listen(process.env.PORT || 5000, () =>
+  console.log(`✅ Backend running on http://localhost:${process.env.PORT || 5000}`)
+);
