@@ -11,27 +11,38 @@ function App() {
   const [loadingImprove, setLoadingImprove] = useState(false);
   const [loadingFinalize, setLoadingFinalize] = useState(false);
 
-  const API_BASE = import.meta.env.VITE_API_BASE;
+  // ✅ Use production API base or fallback to localhost
+  const API_BASE =
+    import.meta.env.VITE_API_BASE ||
+    (window.location.hostname === "localhost"
+      ? "http://localhost:5000"
+      : window.location.origin);
 
-
-  // Helper to safely parse JSON and avoid crashes
+  // ✅ Helper to safely fetch JSON and detect backend HTML errors
   const safeFetchJson = async (url, options) => {
     try {
       const res = await fetch(url, options);
       const text = await res.text();
+
+      // Detect HTML errors (e.g. Render 404/502 pages)
+      if (text.startsWith("<!DOCTYPE") || text.startsWith("<html")) {
+        console.error("⚠️ Backend returned HTML instead of JSON:", text.slice(0, 120));
+        return { ok: false, data: { error: "Server returned HTML — likely wrong endpoint or CORS issue." } };
+      }
+
       try {
         return { ok: res.ok, data: JSON.parse(text) };
       } catch {
         console.error("Invalid JSON from backend:", text);
-        return { ok: false, data: { error: "Invalid backend response" } };
+        return { ok: false, data: { error: "Invalid backend JSON response" } };
       }
     } catch (err) {
       console.error("Fetch failed:", err);
-      return { ok: false, data: { error: "Network error" } };
+      return { ok: false, data: { error: "Network error. Check API_BASE URL." } };
     }
   };
 
-  // 1️⃣ Generate initial blueprint
+  // 🧠 1️⃣ Generate initial blueprint
   const handleGenerate = async (e) => {
     e.preventDefault();
     setMessage("");
@@ -47,14 +58,14 @@ function App() {
     if (ok) {
       setSessionId(data.sessionId);
       setBlueprint(data.blueprint);
-      setMessage("✅ Blueprint generated! You can suggest improvements above.");
+      setMessage("✅ Blueprint generated! You can suggest improvements below.");
     } else {
-      setMessage(`❌ Error: ${data.error || "Could not generate blueprint."}`);
+      setMessage(`❌ ${data.error || "Could not generate blueprint."}`);
     }
     setLoadingGenerate(false);
   };
 
-  // 2️⃣ Improve blueprint / send message to agent
+  // ✍️ 2️⃣ Improve blueprint
   const handleImprove = async () => {
     if (!instruction || !sessionId) return;
     setMessage("");
@@ -71,12 +82,12 @@ function App() {
       setInstruction("");
       setMessage("✅ Blueprint updated!");
     } else {
-      setMessage(`❌ Error: ${data.error || "Could not update blueprint."}`);
+      setMessage(`❌ ${data.error || "Could not update blueprint."}`);
     }
     setLoadingImprove(false);
   };
 
-  // 3️⃣ Finalize blueprint and send PDF
+  // 📤 3️⃣ Finalize & send PDF
   const handleFinalize = async () => {
     if (!sessionId) return;
     setMessage("");
@@ -93,7 +104,7 @@ function App() {
       setSessionId(null);
       setBlueprint("");
     } else {
-      setMessage(`❌ Error: ${data.error || "Could not finalize blueprint."}`);
+      setMessage(`❌ ${data.error || "Could not finalize blueprint."}`);
     }
     setLoadingFinalize(false);
   };
@@ -147,7 +158,6 @@ function App() {
           <button
             type="submit"
             disabled={loadingGenerate}
-            aria-busy={loadingGenerate}
             style={{
               background: "#1a1a1a",
               color: "white",
@@ -202,7 +212,6 @@ function App() {
           <button
             onClick={handleImprove}
             disabled={loadingImprove}
-            aria-busy={loadingImprove}
             style={{
               background: "#007bff",
               color: "white",
@@ -222,7 +231,6 @@ function App() {
           <button
             onClick={handleFinalize}
             disabled={loadingFinalize}
-            aria-busy={loadingFinalize}
             style={{
               background: "#28a745",
               color: "white",
