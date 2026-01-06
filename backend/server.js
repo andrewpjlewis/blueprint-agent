@@ -11,42 +11,28 @@ import he from "he";
 dotenv.config();
 
 const app = express();
-
-// ✅ CORS — allows frontend + local dev
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://blueprint-agent-frontend.onrender.com",
-];
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        console.warn("❌ Blocked CORS request from:", origin);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-  })
-);
+app.use(cors());
 app.use(express.json());
 
-// ✅ Email transporter
+// Email transporter
 const transporter = nodemailer.createTransport({
   service: "gmail",
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
 });
 
 // In-memory sessions
 const sessions = {};
 
-// 🧹 Clean AI text
+// Clean AI text
 function cleanText(raw) {
   const decoded = he.decode(raw || "");
   return decoded.replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[•–—]/g, "-").trim();
 }
 
-// 🧠 Groq API helper
+// Call Groq AI
 async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -55,25 +41,46 @@ async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
         "Content-Type": "application/json",
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
-      body: JSON.stringify({ model, messages, max_tokens: 1200, temperature: 0.7 }),
+      body: JSON.stringify({
+        model,
+        messages,
+        max_tokens: 1200,
+        temperature: 0.7,
+      }),
     });
     const data = await res.json();
     return data?.choices?.[0]?.message?.content
       ? cleanText(data.choices[0].message.content)
       : null;
   } catch (err) {
-    console.error("❌ Error calling Groq:", err);
+    console.error("❌ Error calling AI:", err);
     return null;
   }
 }
 
-// 🧾 PDF generator
+// Draw formatted PDF from AI text
+function drawMarkdown(doc, markdown) {
+  const paragraphs = markdown.split(/\n+/);
+  paragraphs.forEach(p => {
+    p = p.trim();
+    if (!p) return;
+    if (p.startsWith("**") && p.endsWith("**")) {
+      doc.font("Helvetica-Bold").fillColor("#333").text(p.replace(/\*\*/g, ""), { lineGap: 4 });
+    } else if (p.startsWith("- ") || p.startsWith("* ")) {
+      doc.font("Helvetica").fillColor("#333").text("• " + p.slice(2), { lineGap: 4 });
+    } else if (/^#/.test(p)) {
+      doc.font("Helvetica-Bold").fillColor("#333").text(p.replace(/^#+\s*/, ""), { lineGap: 4 });
+    } else {
+      doc.font("Helvetica").fillColor("#333").text(p, { lineGap: 4 });
+    }
+    doc.moveDown(0.2);
+  });
+}
+
+// Create PDF in /tmp (Render safe)
 function createPDF(text) {
   const discount = process.env.DISCOUNT_PERCENT || 25;
-  const projectsDir = path.join(process.cwd(), "projects");
-  if (!fs.existsSync(projectsDir)) fs.mkdirSync(projectsDir, { recursive: true });
-
-  const filePath = path.join(projectsDir, `blueprint-${Date.now()}.pdf`);
+  const filePath = path.join("/tmp", `blueprint-${Date.now()}.pdf`);
   const doc = new PDFDocument({ margin: 40 });
   doc.pipe(fs.createWriteStream(filePath));
 
@@ -81,15 +88,17 @@ function createPDF(text) {
   doc.moveDown();
   doc.fontSize(12).text(`Discount: ${discount}% off your next project`);
   doc.moveDown();
-  doc.fontSize(11).fillColor("#333").text(text, { lineGap: 4 });
-  doc.moveDown();
-  doc.text("Call to Action: Contact me to get started!", { align: "center" });
-  doc.end();
 
+  drawMarkdown(doc, text);
+
+  doc.moveDown();
+  doc.fillColor("#333").text("Call to Action: Contact me to get started!", { align: "center" });
+
+  doc.end();
   return filePath;
 }
 
-// 📧 Send email
+// Send email
 async function sendEmail(to, pdfPath) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -100,7 +109,7 @@ async function sendEmail(to, pdfPath) {
   });
 }
 
-// 🟢 Start session
+// 1️⃣ Start session
 app.post("/agent/start", async (req, res) => {
   const { idea, email } = req.body;
   if (!idea || !email) return res.status(400).json({ error: "Idea and email required" });
@@ -114,11 +123,17 @@ app.post("/agent/start", async (req, res) => {
   const blueprint = await callGroqAI(messages);
   if (!blueprint) return res.status(500).json({ error: "AI generation failed" });
 
-  sessions[sessionId] = { idea, email, blueprint, history: [...messages, { role: "assistant", content: blueprint }] };
+  sessions[sessionId] = {
+    idea,
+    email,
+    blueprint,
+    history: [...messages, { role: "assistant", content: blueprint }],
+  };
+
   res.json({ sessionId, blueprint });
 });
 
-// 🟡 Improve blueprint
+// 2️⃣ Continue conversation
 app.post("/agent/message", async (req, res) => {
   const { sessionId, message } = req.body;
   if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
@@ -131,36 +146,29 @@ app.post("/agent/message", async (req, res) => {
 
   session.history.push({ role: "assistant", content: reply });
   session.blueprint = reply;
+
   res.json({ reply, blueprint: reply });
 });
 
-// 🧩 Finalize & email (with full logging)
+// 3️⃣ Finalize PDF & email
 app.post("/agent/finalize", async (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
+
   try {
-    const { sessionId } = req.body;
-    if (!sessionId || !sessions[sessionId]) {
-      return res.status(400).json({ error: "Invalid session" });
-    }
-
     const session = sessions[sessionId];
-    if (!session.blueprint) {
-      return res.status(400).json({ error: "No blueprint found in session." });
-    }
-
-    console.log("📦 Finalizing session:", sessionId, "for", session.email);
     const pdfPath = createPDF(session.blueprint);
-    console.log("✅ PDF created:", pdfPath);
-
     await sendEmail(session.email, pdfPath);
-    console.log("📨 Email sent to:", session.email);
 
     res.json({ message: "Blueprint finalized and emailed!" });
   } catch (err) {
-    console.error("❌ Error in /agent/finalize:", err);
-    res.status(500).json({ error: "Server error: " + err.message });
+    console.error("❌ Finalize failed:", err);
+    res.status(500).json({ error: "Server error during PDF/email creation" });
   }
 });
 
-app.listen(process.env.PORT || 5000, () =>
-  console.log(`✅ Backend running on http://localhost:${process.env.PORT || 5000}`)
-);
+// Start server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`✅ Backend running on http://localhost:${PORT}`);
+});
