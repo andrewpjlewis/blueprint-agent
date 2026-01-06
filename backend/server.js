@@ -7,14 +7,26 @@ import PDFDocument from "pdfkit";
 import nodemailer from "nodemailer";
 import fetch from "node-fetch";
 import he from "he";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-// Email transporter
+// ✅ Automatically allow your deployed frontend origin
+app.use(
+  cors({
+    origin: process.env.CLIENT_URL || "*", // e.g. https://your-frontend.vercel.app
+    methods: ["GET", "POST"],
+  })
+);
+
+// __dirname fix for ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Email setup
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -23,7 +35,7 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// In-memory sessions
+// In-memory sessions (replace with DB for scaling)
 const sessions = {};
 
 // Clean AI text
@@ -32,7 +44,7 @@ function cleanText(raw) {
   return decoded.replace(/[’‘]/g, "'").replace(/[“”]/g, '"').replace(/[•–—]/g, "-").trim();
 }
 
-// Call Groq AI
+// Call Groq API
 async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -48,40 +60,44 @@ async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
         temperature: 0.7,
       }),
     });
+
     const data = await res.json();
-    return data?.choices?.[0]?.message?.content ? cleanText(data.choices[0].message.content) : null;
+    if (!res.ok) {
+      console.error("❌ Groq error:", data);
+      return null;
+    }
+    return data?.choices?.[0]?.message?.content
+      ? cleanText(data.choices[0].message.content)
+      : null;
   } catch (err) {
-    console.error("❌ Error calling AI:", err);
+    console.error("❌ Fetch error:", err);
     return null;
   }
 }
 
-// Draw formatted PDF from AI text
+// Draw formatted text
 function drawMarkdown(doc, markdown) {
   const paragraphs = markdown.split(/\n+/);
-  paragraphs.forEach(p => {
-    p = p.trim();
-    if (!p) return;
+  for (const pRaw of paragraphs) {
+    const p = pRaw.trim();
+    if (!p) continue;
     if (p.startsWith("**") && p.endsWith("**")) {
-      // Bold
       doc.font("Helvetica-Bold").fillColor("#333").text(p.replace(/\*\*/g, ""), { lineGap: 4 });
     } else if (p.startsWith("- ") || p.startsWith("* ")) {
-      // Bullet
       doc.font("Helvetica").fillColor("#333").text("• " + p.slice(2), { lineGap: 4 });
     } else if (/^#/.test(p)) {
-      // Heading style (optional)
       doc.font("Helvetica-Bold").fillColor("#333").text(p.replace(/^#+\s*/, ""), { lineGap: 4 });
     } else {
       doc.font("Helvetica").fillColor("#333").text(p, { lineGap: 4 });
     }
     doc.moveDown(0.2);
-  });
+  }
 }
 
 // Create PDF
 function createPDF(text) {
   const discount = process.env.DISCOUNT_PERCENT || 25;
-  const projectsDir = path.join(process.cwd(), "projects");
+  const projectsDir = path.join(__dirname, "projects");
   if (!fs.existsSync(projectsDir)) fs.mkdirSync(projectsDir);
 
   const filePath = path.join(projectsDir, `blueprint-${Date.now()}.pdf`);
@@ -113,7 +129,9 @@ async function sendEmail(to, pdfPath) {
   });
 }
 
-// 1️⃣ Start session
+// ---------- ROUTES ----------
+
+// Start session
 app.post("/agent/start", async (req, res) => {
   const { idea, email } = req.body;
   if (!idea || !email) return res.status(400).json({ error: "Idea and email required" });
@@ -132,7 +150,7 @@ app.post("/agent/start", async (req, res) => {
   res.json({ sessionId, blueprint });
 });
 
-// 2️⃣ Continue conversation
+// Continue conversation
 app.post("/agent/message", async (req, res) => {
   const { sessionId, message } = req.body;
   if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
@@ -149,7 +167,7 @@ app.post("/agent/message", async (req, res) => {
   res.json({ reply, blueprint: reply });
 });
 
-// 3️⃣ Finalize PDF & email
+// Finalize
 app.post("/agent/finalize", async (req, res) => {
   const { sessionId } = req.body;
   if (!sessionId || !sessions[sessionId]) return res.status(400).json({ error: "Invalid session" });
@@ -158,9 +176,17 @@ app.post("/agent/finalize", async (req, res) => {
   const pdfPath = createPDF(session.blueprint);
   await sendEmail(session.email, pdfPath);
 
-  res.json({ message: "Blueprint finalized and emailed!" });
+  res.json({ message: "✅ Blueprint finalized and emailed successfully!" });
 });
 
-app.listen(process.env.PORT || 5000, () => {
-  console.log(`✅ Backend running on http://localhost:${process.env.PORT || 5000}`);
-});
+// ---------- DEPLOYMENT SUPPORT ----------
+
+// Serve frontend build if running in production
+const frontendPath = path.join(__dirname, "../frontend/dist");
+if (fs.existsSync(frontendPath)) {
+  app.use(express.static(frontendPath));
+  app.get("*", (_, res) => res.sendFile(path.join(frontendPath, "index.html")));
+}
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`✅ Backend running on port ${PORT}`));
