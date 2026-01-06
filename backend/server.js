@@ -15,12 +15,25 @@ const app = express();
 app.use(express.json());
 
 // ✅ Automatically allow your deployed frontend origin
+const allowedOrigins = [
+  "http://localhost:5173", // local dev
+  "https://blueprint-agent-frontend.onrender.com", // production frontend
+];
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "*", // e.g. https://your-frontend.vercel.app
-    methods: ["GET", "POST"],
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn("❌ Blocked CORS request from:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
   })
 );
+
 
 // __dirname fix for ES Modules
 const __filename = fileURLToPath(import.meta.url);
