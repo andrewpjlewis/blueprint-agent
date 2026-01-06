@@ -11,7 +11,7 @@ function App() {
   const [loadingImprove, setLoadingImprove] = useState(false);
   const [loadingFinalize, setLoadingFinalize] = useState(false);
 
-  const API_BASE = process.env.REACT_APP_API_BASE || "http://localhost:5000";
+  const API_BASE = process.env.REACT_APP_API_BASE
 
   // 1️⃣ Generate initial blueprint
   const handleGenerate = async (e) => {
