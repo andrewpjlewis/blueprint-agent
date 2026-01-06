@@ -11,7 +11,8 @@ function App() {
   const [loadingImprove, setLoadingImprove] = useState(false);
   const [loadingFinalize, setLoadingFinalize] = useState(false);
 
-  const API_BASE = process.env.REACT_APP_API_BASE;
+  const API_BASE = import.meta.env.VITE_API_BASE;
+
 
   // Helper to safely parse JSON and avoid crashes
   const safeFetchJson = async (url, options) => {
