@@ -11,7 +11,24 @@ function App() {
   const [loadingImprove, setLoadingImprove] = useState(false);
   const [loadingFinalize, setLoadingFinalize] = useState(false);
 
-  const API_BASE = process.env.REACT_APP_API_BASE
+  const API_BASE = process.env.REACT_APP_API_BASE;
+
+  // Helper to safely parse JSON and avoid crashes
+  const safeFetchJson = async (url, options) => {
+    try {
+      const res = await fetch(url, options);
+      const text = await res.text();
+      try {
+        return { ok: res.ok, data: JSON.parse(text) };
+      } catch {
+        console.error("Invalid JSON from backend:", text);
+        return { ok: false, data: { error: "Invalid backend response" } };
+      }
+    } catch (err) {
+      console.error("Fetch failed:", err);
+      return { ok: false, data: { error: "Network error" } };
+    }
+  };
 
   // 1️⃣ Generate initial blueprint
   const handleGenerate = async (e) => {
@@ -20,26 +37,20 @@ function App() {
     setBlueprint("");
     setLoadingGenerate(true);
 
-    try {
-      const res = await fetch(`${API_BASE}/agent/start`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, email }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setSessionId(data.sessionId);
-        setBlueprint(data.blueprint);
-        setMessage("✅ Blueprint generated! You can suggest improvements above.");
-      } else {
-        setMessage(`❌ Error: ${data.error || "Could not generate blueprint."}`);
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage("❌ Error generating blueprint.");
-    } finally {
-      setLoadingGenerate(false);
+    const { ok, data } = await safeFetchJson(`${API_BASE}/agent/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ idea, email }),
+    });
+
+    if (ok) {
+      setSessionId(data.sessionId);
+      setBlueprint(data.blueprint);
+      setMessage("✅ Blueprint generated! You can suggest improvements above.");
+    } else {
+      setMessage(`❌ Error: ${data.error || "Could not generate blueprint."}`);
     }
+    setLoadingGenerate(false);
   };
 
   // 2️⃣ Improve blueprint / send message to agent
@@ -48,26 +59,20 @@ function App() {
     setMessage("");
     setLoadingImprove(true);
 
-    try {
-      const res = await fetch(`${API_BASE}/agent/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, message: instruction }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setBlueprint(data.blueprint);
-        setInstruction("");
-        setMessage("✅ Blueprint updated!");
-      } else {
-        setMessage(`❌ Error: ${data.error || "Could not update blueprint."}`);
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage("❌ Error improving blueprint.");
-    } finally {
-      setLoadingImprove(false);
+    const { ok, data } = await safeFetchJson(`${API_BASE}/agent/message`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, message: instruction }),
+    });
+
+    if (ok) {
+      setBlueprint(data.blueprint);
+      setInstruction("");
+      setMessage("✅ Blueprint updated!");
+    } else {
+      setMessage(`❌ Error: ${data.error || "Could not update blueprint."}`);
     }
+    setLoadingImprove(false);
   };
 
   // 3️⃣ Finalize blueprint and send PDF
@@ -76,26 +81,20 @@ function App() {
     setMessage("");
     setLoadingFinalize(true);
 
-    try {
-      const res = await fetch(`${API_BASE}/agent/finalize`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setMessage(data.message);
-        setSessionId(null);
-        setBlueprint("");
-      } else {
-        setMessage(`❌ Error: ${data.error || "Could not finalize blueprint."}`);
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage("❌ Error finalizing blueprint.");
-    } finally {
-      setLoadingFinalize(false);
+    const { ok, data } = await safeFetchJson(`${API_BASE}/agent/finalize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+
+    if (ok) {
+      setMessage(data.message);
+      setSessionId(null);
+      setBlueprint("");
+    } else {
+      setMessage(`❌ Error: ${data.error || "Could not finalize blueprint."}`);
     }
+    setLoadingFinalize(false);
   };
 
   return (
