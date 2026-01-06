@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -19,16 +18,22 @@ app.use(cors({ origin: FRONTEND_ORIGIN }));
 
 app.use(express.json());
 
+// Logging middleware for debugging
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`, req.body);
+  next();
+});
+
 // Email transporter
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, // App Password or OAuth recommended
+    pass: process.env.EMAIL_PASS, // Use App Password or OAuth
   },
 });
 
-// In-memory sessions (for production, consider Redis/Mongo)
+// In-memory sessions (consider Redis/Mongo for production scale)
 const sessions = {};
 
 // Clean AI text
@@ -53,21 +58,17 @@ async function callGroqAI(messages, model = "llama-3.3-70b-versatile") {
         temperature: 0.7,
       }),
     });
-
-    if (!res.ok) {
-      console.error("AI API returned error", await res.text());
-      return null;
-    }
-
     const data = await res.json();
-    return data?.choices?.[0]?.message?.content ? cleanText(data.choices[0].message.content) : null;
+    return data?.choices?.[0]?.message?.content
+      ? cleanText(data.choices[0].message.content)
+      : null;
   } catch (err) {
     console.error("❌ Error calling AI:", err);
     return null;
   }
 }
 
-// Draw formatted PDF
+// Draw formatted PDF from AI text
 function drawMarkdown(doc, markdown) {
   const paragraphs = markdown.split(/\n+/);
   paragraphs.forEach((p) => {
@@ -87,7 +88,7 @@ function drawMarkdown(doc, markdown) {
   });
 }
 
-// Create PDF buffer
+// Create PDF in memory
 function createPDFBuffer(text) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 40 });
@@ -111,7 +112,7 @@ function createPDFBuffer(text) {
   });
 }
 
-// Send email
+// Send email with PDF buffer
 async function sendEmail(to, pdfBuffer) {
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
@@ -121,9 +122,6 @@ async function sendEmail(to, pdfBuffer) {
     attachments: [{ filename: "blueprint.pdf", content: pdfBuffer }],
   });
 }
-
-// ✅ Ping route
-app.get("/ping", (req, res) => res.json({ status: "ok" }));
 
 // 1️⃣ Start session
 app.post("/agent/start", async (req, res) => {
@@ -193,6 +191,19 @@ app.post("/agent/finalize", async (req, res) => {
   }
 });
 
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
+
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({ error: "Internal server error" });
+});
+
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`✅ Backend running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Backend running on port ${PORT}`);
+});
