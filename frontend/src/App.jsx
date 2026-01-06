@@ -9,7 +9,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
 
-  const API_BASE = "http://localhost:5000";
+  const API_BASE = "https://blueprint-agent.onrender.com/";
 
   // 1️⃣ Generate initial blueprint
   const handleGenerate = async (e) => {
